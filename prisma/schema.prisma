@@ -1,0 +1,21 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Occurrence {
+  id        Int      @id @default(autoincrement())
+  titulo    String
+  descricao String
+  categoria String
+  latitude  Float
+  longitude Float
+  cpf       String   @default("")
+  protocolo String   @unique @default(cuid())
+  resolvido Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
