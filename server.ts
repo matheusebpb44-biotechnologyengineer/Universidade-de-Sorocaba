@@ -1,12 +1,28 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
-import { createServer as createViteServer } from 'vite';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import nodemailer from 'nodemailer';
 
-const prisma = new PrismaClient();
+let dbUrl = process.env.DATABASE_URL || 'file:./dev.db';
+if (process.env.VERCEL) {
+  const tmpDbPath = '/tmp/dev.db';
+  if (!fs.existsSync(tmpDbPath)) {
+    try {
+      fs.copyFileSync(path.join(process.cwd(), 'prisma', 'dev.db'), tmpDbPath);
+    } catch (e) {
+      console.log('Error copying DB on Vercel:', e);
+    }
+  }
+  dbUrl = `file:${tmpDbPath}`;
+}
+
+const prisma = new PrismaClient({
+  datasources: {
+    db: { url: dbUrl }
+  }
+});
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -181,7 +197,8 @@ app.post('/api/occurrences/:id/comments', async (req, res) => {
 
 // Start Server Setup (Export app for Vercel, listen for local dev)
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
