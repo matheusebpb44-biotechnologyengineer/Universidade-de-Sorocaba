@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from 'react-leaflet';
 import axios from 'axios';
-import { MapPin, AlertTriangle, LightbulbOff, Trash2, PlusCircle, X, Search, CheckCircle } from 'lucide-react';
+import { MapPin, AlertTriangle, LightbulbOff, Trash2, PlusCircle, X, Search, CheckCircle, Leaf, ShieldAlert, HeartHandshake, PawPrint } from 'lucide-react';
 import L from 'leaflet';
 
 // Types
@@ -18,17 +18,62 @@ export interface Occurrence {
   createdAt: string;
 }
 
-// Categories and their colors
-const CATEGORIES: Record<string, { color: string, bg: string, text: string, icon: React.ElementType }> = {
-  'Foco de Dengue': { color: '#ef4444', bg: 'bg-red-100', text: 'text-red-600', icon: AlertTriangle }, // Red
-  'Buraco na Via': { color: '#f97316', bg: 'bg-orange-100', text: 'text-orange-600', icon: AlertTriangle }, // Orange
-  'Iluminação Pública': { color: '#eab308', bg: 'bg-yellow-100', text: 'text-yellow-600', icon: LightbulbOff }, // Yellow
-  'Lixo Irregular': { color: '#8b5cf6', bg: 'bg-purple-100', text: 'text-purple-600', icon: Trash2 }, // Purple
+// Categorias Grouped
+const THEME_GROUPS: Record<string, string[]> = {
+  'Meio Ambiente e Saúde': [
+    'Focos de Dengue', 'Enchentes e alagamentos', 'Desmatamento/corte irregular de árvores', 
+    'Poluição sonora', 'Poluição do ar', 'Poluição visual', 'Acúmulo de água parada'
+  ],
+  'Infraestrutura Urbana': [
+    'Buracos na via', 'Pavimentação danificada/calçadas', 'Sinalização danificada/ausente',
+    'Semáforos com defeito', 'Problemas estruturais em pontes', 'Falta de acessibilidade'
+  ],
+  'Serviços Públicos': [
+    'Iluminação: Lâmpada apagada', 'Iluminação: Lâmpada piscando', 'Lixo irregular',
+    'Falta de coleta de lixo', 'Falta de varrição/limpeza', 'Problemas em pontos de ônibus',
+    'Falta de transporte público'
+  ],
+  'Animais': [
+    'Maus-tratos de animais', 'Animais abandonados', 'Animais mortos', 'Infestação de pragas urbanas'
+  ],
+  'Segurança e Ordem': [
+    'Ponto de venda de drogas', 'Consumo de drogas no local', 'Vandalismo/depredação',
+    'Ocupação irregular', 'Estacionamento irregular'
+  ],
+  'Assistência Social': [
+    'Pessoas em situação de rua', 'Crianças em situação de risco', 'Idosos abandonados/risco'
+  ]
+};
+
+// Theme configurations for map pins and UI
+const THEMES: Record<string, { color: string, bg: string, text: string, icon: React.ElementType }> = {
+  'Meio Ambiente e Saúde': { color: '#10b981', bg: 'bg-emerald-100', text: 'text-emerald-700', icon: Leaf },
+  'Infraestrutura Urbana': { color: '#f97316', bg: 'bg-orange-100', text: 'text-orange-700', icon: AlertTriangle },
+  'Serviços Públicos': { color: '#eab308', bg: 'bg-yellow-100', text: 'text-yellow-700', icon: LightbulbOff },
+  'Animais': { color: '#8b5cf6', bg: 'bg-purple-100', text: 'text-purple-700', icon: PawPrint },
+  'Segurança e Ordem': { color: '#ef4444', bg: 'bg-red-100', text: 'text-red-700', icon: ShieldAlert },
+  'Assistência Social': { color: '#3b82f6', bg: 'bg-blue-100', text: 'text-blue-700', icon: HeartHandshake },
+};
+
+// Map old and current subcategories to their respective themes
+const getThemeForCategory = (categoryName: string) => {
+  for (const [theme, subcategories] of Object.entries(THEME_GROUPS)) {
+    if (subcategories.includes(categoryName)) return theme;
+  }
+  
+  // Handling old categories that might be in the database
+  if (categoryName.toLowerCase().includes('dengue') || categoryName.toLowerCase().includes('meio ambiente')) return 'Meio Ambiente e Saúde';
+  if (categoryName.toLowerCase().includes('buraco') || categoryName.toLowerCase().includes('via')) return 'Infraestrutura Urbana';
+  if (categoryName.toLowerCase().includes('iluminação') || categoryName.toLowerCase().includes('lixo')) return 'Serviços Públicos';
+  
+  // Defalt fallback
+  return 'Infraestrutura Urbana'; 
 };
 
 // Fix for default Leaflet icons in React
 const categoryIcon = (categoryName: string, resolvido: boolean = false) => {
-  let color = CATEGORIES[categoryName]?.color || '#6b7280';
+  const themeName = getThemeForCategory(categoryName);
+  let color = THEMES[themeName]?.color || '#6b7280';
   if (resolvido) {
     color = '#94a3b8'; // gray-400 for resolved
   }
@@ -69,7 +114,7 @@ export default function App() {
   // Form State
   const [titulo, setTitulo] = useState('');
   const [descricao, setDescricao] = useState('');
-  const [categoria, setCategoria] = useState('Foco de Dengue');
+  const [categoria, setCategoria] = useState('Focos de Dengue');
   const [cpf, setCpf] = useState('');
 
   // Load occurrences
@@ -111,7 +156,7 @@ export default function App() {
       setTitulo('');
       setDescricao('');
       setCpf('');
-      setCategoria('Foco de Dengue');
+      setCategoria('Focos de Dengue');
       setIsModalOpen(false);
       setSelectedLocation(null);
       
@@ -258,12 +303,12 @@ export default function App() {
           <div className="absolute top-4 right-4 z-[400] bg-white/90 backdrop-blur px-4 py-3 rounded-lg border border-slate-200 shadow-sm hidden sm:block">
             <h3 className="text-[10px] font-bold text-slate-900 mb-2 uppercase tracking-wider">Legenda</h3>
             <div className="space-y-2 text-[10px] font-bold uppercase text-slate-700">
-              {Object.entries(CATEGORIES).map(([cat, info]) => {
+              {Object.entries(THEMES).map(([themeName, info]) => {
                 const Icon = info.icon;
                 return (
-                  <div key={cat} className="flex items-center gap-2">
+                  <div key={themeName} className="flex items-center gap-2">
                     <Icon className="w-4 h-4" style={{ color: info.color }} />
-                    <span className="text-gray-700">{cat}</span>
+                    <span className="text-gray-700">{themeName}</span>
                   </div>
                 );
               })}
@@ -304,8 +349,9 @@ export default function App() {
                 </div>
               ) : (
                 occurrences.map((occ) => {
-                  const categoryInfo = CATEGORIES[occ.categoria];
-                  const Icon = categoryInfo?.icon || MapPin;
+                  const themeName = getThemeForCategory(occ.categoria);
+                  const themeInfo = THEMES[themeName];
+                  const Icon = themeInfo?.icon || MapPin;
                   
                   return (
                     <div key={occ.id} className={`bg-white border text-left border-slate-100 rounded-lg p-4 hover:bg-slate-50/50 transition-colors ${occ.resolvido ? 'opacity-60' : ''}`}>
@@ -314,14 +360,14 @@ export default function App() {
                           <h4 className={`text-sm font-medium ${occ.resolvido ? 'text-slate-500 line-through' : 'text-slate-800'} line-clamp-1`}>{occ.titulo}</h4>
                           {occ.resolvido && <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />}
                         </div>
-                        <Icon className="w-5 h-5 shrink-0 ml-2" style={{ color: categoryInfo?.color }} />
+                        <Icon className="w-5 h-5 shrink-0 ml-2" style={{ color: themeInfo?.color }} />
                       </div>
                       <p className="text-xs text-slate-500 mb-3 line-clamp-2">{occ.descricao}</p>
                       <div className="flex items-center justify-between">
-                        <span className={`inline-block px-2 py-0.5 text-[10px] font-bold uppercase rounded-full ${categoryInfo?.bg} ${categoryInfo?.text}`}>
+                        <span className={`inline-block px-2 py-0.5 text-[10px] font-bold uppercase text-center rounded-full ${themeInfo?.bg} ${themeInfo?.text} max-w-full truncate`}>
                           {occ.categoria}
                         </span>
-                        <span className="text-[10px] font-medium text-slate-400">
+                        <span className="text-[10px] font-medium text-slate-400 shrink-0 ml-2">
                           {new Date(occ.createdAt).toLocaleDateString('pt-BR')}
                         </span>
                       </div>
@@ -391,10 +437,14 @@ export default function App() {
                     required
                     value={categoria}
                     onChange={(e) => setCategoria(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 max-h-48"
                   >
-                    {Object.keys(CATEGORIES).map((cat) => (
-                      <option key={cat} value={cat}>{cat}</option>
+                    {Object.entries(THEME_GROUPS).map(([theme, items]) => (
+                      <optgroup key={theme} label={theme}>
+                        {items.map(item => (
+                          <option key={item} value={item}>{item}</option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </div>
