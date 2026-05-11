@@ -24,7 +24,7 @@ async function startServer() {
   // API Routes
   app.post('/api/occurrences', async (req, res) => {
     try {
-      const { titulo, descricao, categoria, latitude, longitude, cpf } = req.body;
+      const { titulo, descricao, categoria, latitude, longitude, cpf, prioridade } = req.body;
       const protocolo = Math.random().toString(36).substring(2, 10).toUpperCase();
 
       const occurrence = await prisma.occurrence.create({
@@ -35,8 +35,12 @@ async function startServer() {
           latitude: parseFloat(latitude),
           longitude: parseFloat(longitude),
           cpf: cpf || '',
+          prioridade: prioridade || 'Normal',
           protocolo,
         },
+        include: {
+          comments: true
+        }
       });
 
       // After creating, check count
@@ -86,7 +90,11 @@ async function startServer() {
       const { protocolo } = req.params;
       const updated = await prisma.occurrence.update({
         where: { protocolo },
-        data: { resolvido: true }
+        data: { 
+          resolvido: true,
+          status: 'Resolvida',
+          resolvedAt: new Date()
+        }
       });
       res.json(updated);
     } catch (error) {
@@ -95,15 +103,68 @@ async function startServer() {
     }
   });
 
+  app.get('/api/occurrences/history/:cpf', async (req, res) => {
+    try {
+      const { cpf } = req.params;
+      const occurrences = await prisma.occurrence.findMany({
+        where: { cpf },
+        orderBy: { createdAt: 'desc' },
+        include: { comments: true }
+      });
+      res.json(occurrences);
+    } catch (error) {
+      console.error('Error fetching history:', error);
+      res.status(500).json({ error: 'Erro ao buscar histórico.' });
+    }
+  });
+
   app.get('/api/occurrences', async (req, res) => {
     try {
       const occurrences = await prisma.occurrence.findMany({
-        orderBy: { createdAt: 'desc' }
+        orderBy: { createdAt: 'desc' },
+        include: { comments: true }
       });
       res.json(occurrences);
     } catch (error) {
       console.error('Error fetching occurrences:', error);
       res.status(500).json({ error: 'Erro ao buscar ocorrências.' });
+    }
+  });
+
+  // Endpoints for likes and comments
+  app.put('/api/occurrences/:id/like', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const updated = await prisma.occurrence.update({
+        where: { id: Number(id) },
+        data: { likes: { increment: 1 } },
+        include: { comments: true }
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error('Error liking occurrence:', error);
+      res.status(500).json({ error: 'Erro ao curtir ocorrência.' });
+    }
+  });
+
+  app.post('/api/occurrences/:id/comments', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { texto, autorCpf } = req.body;
+      
+      if (!texto) return res.status(400).json({ error: 'Texto do comentário vazio.' });
+
+      const comment = await prisma.comment.create({
+        data: {
+          texto,
+          autorCpf: autorCpf || "Anônimo",
+          occurrenceId: Number(id)
+        }
+      });
+      res.status(201).json(comment);
+    } catch (error) {
+      console.error('Error adding comment:', error);
+      res.status(500).json({ error: 'Erro ao adicionar comentário.' });
     }
   });
 

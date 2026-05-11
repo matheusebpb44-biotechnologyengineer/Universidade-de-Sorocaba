@@ -1,10 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap } from 'react-leaflet';
 import axios from 'axios';
-import { MapPin, AlertTriangle, LightbulbOff, Trash2, PlusCircle, X, Search, CheckCircle, Leaf, ShieldAlert, HeartHandshake, PawPrint } from 'lucide-react';
+import { 
+  MapPin, AlertTriangle, LightbulbOff, Trash2, PlusCircle, X, Search, CheckCircle, 
+  Leaf, ShieldAlert, HeartHandshake, PawPrint, History, BarChart3, Layers, Map as MapIcon,
+  Clock, Activity, ThumbsUp, MessageSquare, AlertOctagon, Send
+} from 'lucide-react';
 import L from 'leaflet';
+import 'leaflet.heat';
 
 // Types
+export interface Comment {
+  id: number;
+  texto: string;
+  autorCpf: string;
+  createdAt: string;
+}
+
 export interface Occurrence {
   id: number;
   titulo: string;
@@ -15,7 +27,12 @@ export interface Occurrence {
   cpf: string;
   protocolo: string;
   resolvido: boolean;
+  status: string;
+  prioridade: string;
+  likes: number;
+  resolvedAt?: string;
   createdAt: string;
+  comments?: Comment[];
 }
 
 // Categorias Grouped
@@ -71,18 +88,22 @@ const getThemeForCategory = (categoryName: string) => {
 };
 
 // Fix for default Leaflet icons in React
-const categoryIcon = (categoryName: string, resolvido: boolean = false) => {
+const categoryIcon = (categoryName: string, resolvido: boolean = false, prioridade: string = 'Normal') => {
   const themeName = getThemeForCategory(categoryName);
   let color = THEMES[themeName]?.color || '#6b7280';
   if (resolvido) {
     color = '#94a3b8'; // gray-400 for resolved
   }
   
-  const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="fill: ${color}; fill-opacity: 0.2;"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>`;
+  const shadowClasses = prioridade === 'Crítica' && !resolvido ? 'drop-shadow-[0_0_8px_rgba(239,68,68,0.8)]' : '';
+  
+  const strokeColor = prioridade === 'Crítica' && !resolvido ? '#ef4444' : color;
+
+  const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="${strokeColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="${shadowClasses}" style="fill: ${color}; fill-opacity: 0.2;"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path><circle cx="12" cy="10" r="3"></circle></svg>`;
 
   return L.divIcon({
     className: 'custom-icon',
-    html: svgIcon,
+    html: prioridade === 'Crítica' && !resolvido ? `<div class="animate-pulse">${svgIcon}</div>` : svgIcon,
     iconSize: [32, 32],
     iconAnchor: [16, 32],
     popupAnchor: [0, -32],
@@ -95,6 +116,23 @@ function MapClickHandler({ onClick }: { onClick: (latlng: L.LatLng) => void }) {
       onClick(e.latlng);
     },
   });
+  return null;
+}
+
+function HeatmapLayer({ points }: { points: [number, number, number][] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!points || points.length === 0 || !(L as any).heatLayer) return;
+    const heat = (L as any).heatLayer(points, {
+      radius: 25,
+      blur: 15,
+      maxZoom: 15,
+    }).addTo(map);
+
+    return () => {
+      map.removeLayer(heat);
+    };
+  }, [map, points]);
   return null;
 }
 
@@ -111,11 +149,24 @@ export default function App() {
   const [searchResult, setSearchResult] = useState<Occurrence | null>(null);
   const [searchError, setSearchError] = useState('');
 
+  const [mapMode, setMapMode] = useState<'pins' | 'heatmap'>('pins');
+  
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [historyCpf, setHistoryCpf] = useState('');
+  const [historyResults, setHistoryResults] = useState<Occurrence[] | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  
+  const [isStatsModalOpen, setIsStatsModalOpen] = useState(false);
+
   // Form State
   const [titulo, setTitulo] = useState('');
   const [descricao, setDescricao] = useState('');
   const [categoria, setCategoria] = useState('Focos de Dengue');
+  const [prioridade, setPrioridade] = useState('Normal');
   const [cpf, setCpf] = useState('');
+  
+  const [newComment, setNewComment] = useState('');
+  const [commentCpf, setCommentCpf] = useState('');
 
   // Load occurrences
   useEffect(() => {
@@ -147,7 +198,8 @@ export default function App() {
         categoria,
         latitude: selectedLocation.lat,
         longitude: selectedLocation.lng,
-        cpf
+        cpf,
+        prioridade
       };
 
       const response = await axios.post('/api/occurrences', newOccurrence);
@@ -157,6 +209,7 @@ export default function App() {
       setDescricao('');
       setCpf('');
       setCategoria('Focos de Dengue');
+      setPrioridade('Normal');
       setIsModalOpen(false);
       setSelectedLocation(null);
       
@@ -172,8 +225,15 @@ export default function App() {
     }
   };
 
-  const handleSearchProtocol = () => {
+  const handleSearchProtocol = async () => {
     if (!searchProtocol.trim()) return;
+    try {
+      // We will refetch single occurrences to get latest comments/likes if we want, or just fetch all and find
+      await fetchOccurrences(); // refresh memory
+    } catch(e) {}
+    
+    // Check locally after refresh
+    // Need to use state from previous line but setOccurrences is async, let's just find in the current state then replace if found
     const found = occurrences.find(o => o.protocolo === searchProtocol.trim());
     if (found) {
       setSearchResult(found);
@@ -181,6 +241,55 @@ export default function App() {
     } else {
       setSearchResult(null);
       setSearchError('Protocolo não encontrado.');
+    }
+  };
+
+  const handleLike = async (id: number) => {
+    try {
+      await axios.put(`/api/occurrences/${id}/like`);
+      await fetchOccurrences();
+      if (searchResult && searchResult.id === id) {
+         setSearchResult(prev => prev ? { ...prev, likes: prev.likes + 1 } : null);
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleAddComment = async (id: number) => {
+    if (!newComment.trim()) return;
+    try {
+      await axios.post(`/api/occurrences/${id}/comments`, {
+        texto: newComment,
+        autorCpf: commentCpf
+      });
+      setNewComment('');
+      
+      // refresh
+      await fetchOccurrences();
+      // Update local searchResult if opened
+      if (searchResult && searchResult.id === id) {
+         const occRes = await axios.get('/api/occurrences');
+         const updatedOcc = occRes.data.find((o: any) => o.id === id);
+         if (updatedOcc) setSearchResult(updatedOcc);
+      }
+    } catch (error) {
+      console.error(error);
+      alert('Erro ao enviar comentário.');
+    }
+  };
+
+  const handleFetchHistory = async () => {
+    if (!historyCpf.trim()) return;
+    setHistoryLoading(true);
+    try {
+      const response = await axios.get(`/api/occurrences/history/${historyCpf.trim()}`);
+      setHistoryResults(response.data);
+    } catch(err) {
+      console.error(err);
+      alert('Erro ao buscar histórico.');
+    } finally {
+      setHistoryLoading(false);
     }
   };
 
@@ -204,6 +313,7 @@ export default function App() {
     
     let txtContent = 'Relatório de Demandas - Cidadão Conectado\n';
     txtContent += 'Projeto de extensão UNISO - ENGENHARIA: TECNOLOGIA E DESAFIOS\n\n';
+    txtContent += `Gerado em: ${new Date().toLocaleString('pt-BR')}\n`;
     txtContent += '==================================================\n\n';
     
     unresolvedOccurrences.forEach(occ => {
@@ -211,9 +321,10 @@ export default function App() {
       txtContent += `Título: ${occ.titulo}\n`;
       txtContent += `Categoria: ${occ.categoria}\n`;
       txtContent += `Descrição: ${occ.descricao}\n`;
-      txtContent += `Data: ${new Date(occ.createdAt).toLocaleDateString('pt-BR')}\n`;
+      txtContent += `Data de Criação: ${new Date(occ.createdAt).toLocaleString('pt-BR')}\n`;
+      txtContent += `Tempo em aberto: ${Math.floor((Date.now() - new Date(occ.createdAt).getTime()) / (1000 * 60 * 60 * 24))} dias\n`;
       txtContent += `CPF do Relator: ${occ.cpf || 'Não informado'}\n`;
-      txtContent += `Status: ${occ.resolvido ? 'Resolvido' : 'Em aberto'}\n`;
+      txtContent += `Status: ${occ.status || (occ.resolvido ? 'Resolvido' : 'Em Análise')}\n`;
       txtContent += `--------------------------------------------------\n\n`;
     });
     
@@ -231,6 +342,24 @@ export default function App() {
   // Sorocaba - SP coordinates
   const defaultCenter: [number, number] = [-23.5015, -47.4581];
 
+  // Stats calculate
+  const totalOccurrences = occurrences.length;
+  const resolvedCount = occurrences.filter(o => o.resolvido).length;
+  const inAnalysisCount = occurrences.filter(o => o.status === 'Em Análise' && !o.resolvido).length;
+  const inProgressCount = occurrences.filter(o => o.status === 'Em Andamento' && !o.resolvido).length;
+  
+  let avgResolutionTimeMs = 0;
+  const resolvedWithTime = occurrences.filter(o => o.resolvido && o.resolvedAt);
+  if (resolvedWithTime.length > 0) {
+    const totalMs = resolvedWithTime.reduce((acc, curr) => {
+      return acc + (new Date(curr.resolvedAt!).getTime() - new Date(curr.createdAt).getTime());
+    }, 0);
+    avgResolutionTimeMs = totalMs / resolvedWithTime.length;
+  }
+  const avgResolutionDays = avgResolutionTimeMs > 0 ? (avgResolutionTimeMs / (1000 * 60 * 60 * 24)).toFixed(1) : 'N/A';
+
+  const heatmapPoints: [number, number, number][] = occurrences.map(o => [o.latitude, o.longitude, o.resolvido ? 0.2 : 1]);
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       {/* Header */}
@@ -247,13 +376,29 @@ export default function App() {
             </div>
           </div>
           
-          <button 
-            onClick={() => setIsConsultModalOpen(true)}
-            className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-bold transition-colors border border-slate-200"
-          >
-            <Search className="w-4 h-4" />
-            <span className="hidden sm:inline">Consultar Protocolo</span>
-          </button>
+          <div className="flex items-center gap-2 overflow-x-auto custom-scroll pb-1">
+            <button 
+              onClick={() => setIsStatsModalOpen(true)}
+              className="flex items-center gap-2 bg-purple-50 hover:bg-purple-100 text-purple-700 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors border border-purple-200 shrink-0"
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span className="hidden sm:inline">Estatísticas</span>
+            </button>
+            <button 
+              onClick={() => setIsHistoryModalOpen(true)}
+              className="flex items-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors border border-emerald-200 shrink-0"
+            >
+              <History className="w-4 h-4" />
+              <span className="hidden sm:inline">Meu Histórico</span>
+            </button>
+            <button 
+              onClick={() => setIsConsultModalOpen(true)}
+              className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors border border-slate-200 shrink-0"
+            >
+              <Search className="w-4 h-4" />
+              <span className="hidden sm:inline">Consultar Protocolo</span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -261,64 +406,111 @@ export default function App() {
       <main className="flex-1 flex flex-col md:flex-row max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 gap-6">
         
         {/* Map Section */}
-        <div className="w-full md:w-2/3 h-[50vh] md:h-[calc(100vh-140px)] rounded-xl border-2 border-slate-300 shadow-inner overflow-hidden relative shrink-0">
-          <MapContainer 
-            center={defaultCenter} 
-            zoom={12} 
-            className="w-full h-full z-0"
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            
-            <MapClickHandler onClick={handleMapClick} />
-
-            {occurrences.map((occ) => (
-              <Marker 
-                key={occ.id} 
-                position={[occ.latitude, occ.longitude]}
-                icon={categoryIcon(occ.categoria, occ.resolvido)}
+        <div className="w-full md:w-2/3 flex flex-col gap-3 shrink-0">
+          <div className="bg-white p-2 rounded-xl flex items-center justify-between border border-slate-200 shadow-sm shrink-0">
+            <h2 className="text-sm font-bold text-slate-800 px-2 flex items-center gap-2">
+              <MapIcon className="w-4 h-4 text-slate-400" /> Vista do Mapa
+            </h2>
+            <div className="flex bg-slate-100 p-1 rounded-lg">
+              <button 
+                onClick={() => setMapMode('pins')}
+                className={`text-xs font-bold px-3 py-1.5 rounded-md transition-all ${mapMode === 'pins' ? 'bg-white shadow-sm text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
               >
-                <Popup className="rounded-lg shadow-sm">
-                  <div className="p-1">
-                    <div className="flex items-center justify-between mb-1">
-                      <div className={`font-semibold ${occ.resolvido ? 'text-slate-500 line-through' : 'text-gray-900'}`}>{occ.titulo}</div>
-                      {occ.resolvido && <CheckCircle className="w-4 h-4 text-emerald-500" />}
-                    </div>
-                    <span className="inline-block px-2 py-1 bg-gray-100 text-xs font-medium rounded text-gray-800 mb-2">
-                      {occ.categoria}
-                    </span>
-                    <p className="text-sm text-gray-600 mb-2">{occ.descricao}</p>
-                    <div className="text-xs text-gray-400">
-                      {new Date(occ.createdAt).toLocaleDateString('pt-BR')} 
-                      <span className="block mt-1 font-mono text-[10px]">Protocolo: {occ.protocolo}</span>
-                    </div>
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
-          </MapContainer>
-          
-          <div className="absolute top-4 right-4 z-[400] bg-white/90 backdrop-blur px-4 py-3 rounded-lg border border-slate-200 shadow-sm hidden sm:block">
-            <h3 className="text-[10px] font-bold text-slate-900 mb-2 uppercase tracking-wider">Legenda</h3>
-            <div className="space-y-2 text-[10px] font-bold uppercase text-slate-700">
-              {Object.entries(THEMES).map(([themeName, info]) => {
-                const Icon = info.icon;
-                return (
-                  <div key={themeName} className="flex items-center gap-2">
-                    <Icon className="w-4 h-4" style={{ color: info.color }} />
-                    <span className="text-gray-700">{themeName}</span>
-                  </div>
-                );
-              })}
+                Pinos
+              </button>
+              <button 
+                onClick={() => setMapMode('heatmap')}
+                className={`text-xs font-bold px-3 py-1.5 rounded-md transition-all ${mapMode === 'heatmap' ? 'bg-white shadow-sm text-red-600' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                Mapa de Calor
+              </button>
             </div>
           </div>
           
-          {/* Instructions overlay */}
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[400] bg-gray-900/80 backdrop-blur text-white px-4 py-2 rounded-full shadow-lg text-sm font-medium flex items-center gap-2 pointer-events-none">
-            <PlusCircle className="w-4 h-4" />
-            Clique no mapa para registrar um problema
+          <div className="flex-1 min-h-[50vh] md:min-h-0 rounded-xl border-2 border-slate-300 shadow-inner overflow-hidden relative">
+            <MapContainer 
+              center={defaultCenter} 
+              zoom={12} 
+              className="w-full h-full z-0"
+            >
+              <TileLayer
+                attribution='&copy; OpenStreetMap contributors'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
+              
+              <MapClickHandler onClick={handleMapClick} />
+
+              {mapMode === 'pins' && occurrences.map((occ) => (
+                <Marker 
+                  key={occ.id} 
+                  position={[occ.latitude, occ.longitude]}
+                  icon={categoryIcon(occ.categoria, occ.resolvido, occ.prioridade)}
+                >
+                  <Popup className="rounded-lg shadow-sm">
+                    <div className="p-1 min-w-[200px]">
+                      <div className="flex items-center justify-between mb-1 gap-2">
+                        <div className={`font-semibold text-sm ${occ.resolvido ? 'text-slate-500 line-through' : 'text-gray-900'}`}>{occ.titulo}</div>
+                        {occ.resolvido && <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />}
+                      </div>
+                      <div className="flex gap-1 flex-wrap mt-1 mb-2">
+                        <span className={`inline-block px-2 py-0.5 bg-slate-100 text-[10px] font-bold rounded text-slate-700 uppercase`}>
+                          {occ.status || 'Em Análise'}
+                        </span>
+                        {occ.prioridade === 'Crítica' && !occ.resolvido && (
+                          <span className="inline-block px-2 py-0.5 bg-red-100 text-[10px] font-bold rounded text-red-700 uppercase">
+                            Crítica
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-gray-600 mb-3">{occ.descricao}</p>
+                      
+                      <div className="flex items-center gap-3 border-t border-slate-100 pt-2 mb-2">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleLike(occ.id); }} 
+                          className="flex items-center gap-1 text-[11px] font-bold text-slate-500 hover:text-blue-600 transition-colors"
+                        >
+                          <ThumbsUp className="w-3.5 h-3.5" /> Apoiar ({occ.likes})
+                        </button>
+                        <div className="flex items-center gap-1 text-[11px] font-bold text-slate-500">
+                          <MessageSquare className="w-3.5 h-3.5" /> {occ.comments?.length || 0}
+                        </div>
+                      </div>
+
+                      <div className="text-xs text-gray-400">
+                        Criado: {new Date(occ.createdAt).toLocaleDateString('pt-BR')} 
+                        {occ.resolvido && occ.resolvedAt && (
+                          <span className="block mt-0.5 text-emerald-600">Resolvido: {new Date(occ.resolvedAt).toLocaleDateString('pt-BR')}</span>
+                        )}
+                        <span className="block mt-2 font-mono text-[10px] bg-slate-50 py-1 px-2 rounded font-bold text-slate-500">Protocolo: {occ.protocolo}</span>
+                      </div>
+                    </div>
+                  </Popup>
+                </Marker>
+              ))}
+
+              {mapMode === 'heatmap' && <HeatmapLayer points={heatmapPoints} />}
+            </MapContainer>
+            
+            <div className="absolute top-4 right-4 z-[400] bg-white/90 backdrop-blur px-4 py-3 rounded-lg border border-slate-200 shadow-sm hidden sm:block">
+              <h3 className="text-[10px] font-bold text-slate-900 mb-2 uppercase tracking-wider">Legenda de Cores</h3>
+              <div className="space-y-2 text-[10px] font-bold uppercase text-slate-700">
+                {Object.entries(THEMES).map(([themeName, info]) => {
+                  const Icon = info.icon;
+                  return (
+                    <div key={themeName} className="flex items-center gap-2">
+                      <Icon className="w-4 h-4" style={{ color: info.color }} />
+                      <span className="text-gray-700">{themeName}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            
+            {/* Instructions overlay */}
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[400] bg-gray-900/80 backdrop-blur text-white px-4 py-2 rounded-full shadow-lg text-sm font-medium flex items-center gap-2 pointer-events-none text-center min-w-max">
+              <PlusCircle className="w-4 h-4" />
+              Clique no mapa para registrar
+            </div>
           </div>
         </div>
 
@@ -362,11 +554,37 @@ export default function App() {
                         </div>
                         <Icon className="w-5 h-5 shrink-0 ml-2" style={{ color: themeInfo?.color }} />
                       </div>
-                      <p className="text-xs text-slate-500 mb-3 line-clamp-2">{occ.descricao}</p>
-                      <div className="flex items-center justify-between">
-                        <span className={`inline-block px-2 py-0.5 text-[10px] font-bold uppercase text-center rounded-full ${themeInfo?.bg} ${themeInfo?.text} max-w-full truncate`}>
+                      
+                      <div className="flex gap-2 items-center mb-2">
+                        <span className={`inline-block px-2 py-0.5 text-[10px] font-bold uppercase text-center rounded-full ${themeInfo?.bg} ${themeInfo?.text} max-w-[150px] truncate shrink-0`}>
                           {occ.categoria}
                         </span>
+                        <span className={`inline-block px-1.5 py-0.5 text-[10px] font-bold uppercase rounded border ${
+                          occ.resolvido ? 'border-emerald-200 text-emerald-600 bg-emerald-50' :
+                          occ.status === 'Em Andamento' ? 'border-blue-200 text-blue-600 bg-blue-50' :
+                          'border-slate-200 text-slate-500 bg-slate-50'
+                        }`}>
+                          {occ.status || 'Em Análise'}
+                        </span>
+                        {occ.prioridade === 'Crítica' && (
+                          <span className="inline-block px-1.5 py-0.5 text-[10px] font-bold uppercase rounded border border-red-200 text-red-600 bg-red-50 shrink-0">
+                            Crítica
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-slate-500 mb-3 line-clamp-2">{occ.descricao}</p>
+                      
+                      <div className="flex items-center gap-3 border-t border-slate-50 pt-2 mb-2">
+                        <button onClick={() => handleLike(occ.id)} className="flex items-center gap-1 text-[10px] font-bold text-slate-500 hover:text-blue-600 transition-colors">
+                          <ThumbsUp className="w-3 h-3" /> Apoiar ({occ.likes})
+                        </button>
+                        <div className="flex items-center gap-1 text-[10px] font-bold text-slate-500">
+                          <MessageSquare className="w-3 h-3" /> {occ.comments?.length || 0}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between mt-auto">
                         <span className="text-[10px] font-medium text-slate-400 shrink-0 ml-2">
                           {new Date(occ.createdAt).toLocaleDateString('pt-BR')}
                         </span>
@@ -446,6 +664,23 @@ export default function App() {
                         ))}
                       </optgroup>
                     ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label htmlFor="prioridade" className="block text-xs font-bold text-slate-500 uppercase flex items-center gap-1">
+                    Prioridade <AlertOctagon className="w-3 h-3" />
+                  </label>
+                  <select
+                    id="prioridade"
+                    required
+                    value={prioridade}
+                    onChange={(e) => setPrioridade(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="Normal">Normal</option>
+                    <option value="Alta">Alta</option>
+                    <option value="Crítica">Crítica (Risco iminente)</option>
                   </select>
                 </div>
                 
@@ -573,14 +808,17 @@ export default function App() {
                   <div className="flex justify-between items-start">
                     <div>
                       <h4 className="font-bold text-slate-800">{searchResult.titulo}</h4>
-                      <p className="text-xs text-slate-500">{searchResult.categoria}</p>
+                      <p className="text-xs text-slate-500 mb-1">{searchResult.categoria}</p>
+                      <span className="text-[10px] uppercase font-bold text-slate-400">Status atual:</span>
                     </div>
                     {searchResult.resolvido ? (
                       <span className="flex items-center gap-1 text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full">
                         <CheckCircle className="w-3 h-3" /> Resolvido
                       </span>
                     ) : (
-                      <span className="flex items-center gap-1 text-[10px] font-bold uppercase bg-amber-100 text-amber-700 px-2 py-1 rounded-full">Pendente</span>
+                      <span className="flex items-center gap-1 text-[10px] font-bold uppercase bg-amber-100 text-amber-700 px-2 py-1 rounded-full">
+                        {searchResult.status || 'Pendente'}
+                      </span>
                     )}
                   </div>
                   <p className="text-sm text-slate-700">{searchResult.descricao}</p>
@@ -597,6 +835,189 @@ export default function App() {
                       </button>
                     </div>
                   )}
+
+                  <div className="pt-4 border-t border-slate-200 mt-4">
+                    <h5 className="text-xs font-bold uppercase text-slate-500 mb-3">Comentários ({searchResult.comments?.length || 0})</h5>
+                    
+                    <div className="space-y-3 mb-4 max-h-40 overflow-y-auto custom-scroll pr-2">
+                       {searchResult.comments?.map(c => (
+                         <div key={c.id} className="bg-white p-3 rounded-md border border-slate-100 shadow-sm">
+                           <p className="text-sm text-slate-700">{c.texto}</p>
+                           <div className="flex justify-between items-center mt-2 text-[10px] text-slate-400 font-medium uppercase truncate">
+                             <span className="truncate">Cidadão: {c.autorCpf || 'Anônimo'}</span>
+                             <span className="shrink-0">{new Date(c.createdAt).toLocaleDateString('pt-BR')}</span>
+                           </div>
+                         </div>
+                       ))}
+                       {(!searchResult.comments || searchResult.comments.length === 0) && (
+                         <p className="text-xs text-slate-400 text-center italic">Nenhum comentário ainda.</p>
+                       )}
+                    </div>
+                    
+                    <div className="flex flex-col gap-2">
+                      <input 
+                        type="text" 
+                        placeholder="Seu CPF (opcional)"
+                        value={commentCpf}
+                        onChange={e => setCommentCpf(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <div className="flex gap-2">
+                        <input 
+                          type="text"
+                          placeholder="Adicionar comentário..."
+                          value={newComment}
+                          onChange={e => setNewComment(e.target.value)}
+                          className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <button 
+                          onClick={() => handleAddComment(searchResult.id)}
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-md transition-colors disabled:opacity-50"
+                          disabled={!newComment.trim()}
+                        >
+                          <Send className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stats Modal */}
+      {isStatsModalOpen && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setIsStatsModalOpen(false)}></div>
+          <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-lg overflow-hidden relative z-10 animate-in fade-in zoom-in flex flex-col max-h-[90vh]">
+            <div className="bg-purple-700 px-6 py-4 flex justify-between items-center text-white shrink-0">
+              <h2 className="text-sm font-bold uppercase tracking-wider flex items-center gap-2">
+                <BarChart3 className="w-5 h-5"/> Estatísticas Públicas
+              </h2>
+              <button 
+                onClick={() => setIsStatsModalOpen(false)}
+                className="text-purple-200 hover:text-white transition-colors"
+                type="button"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto bg-slate-50">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm col-span-2 sm:col-span-1 text-center">
+                  <div className="text-3xl font-bold text-slate-800">{totalOccurrences}</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500 mt-1 line-clamp-2 leading-tight">Total Registrado</div>
+                </div>
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-center">
+                  <div className="text-3xl font-bold text-amber-500">{inAnalysisCount}</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500 mt-1">Em Análise</div>
+                </div>
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-center">
+                  <div className="text-3xl font-bold text-blue-500">{inProgressCount}</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500 mt-1">Em Andamento</div>
+                </div>
+                <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-center">
+                  <div className="text-3xl font-bold text-emerald-500">{resolvedCount}</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500 mt-1">Resolvidas</div>
+                </div>
+              </div>
+
+              <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm mb-6 flex items-center gap-4">
+                <div className="bg-blue-100 p-3 rounded-full text-blue-600 shrink-0">
+                  <Clock className="w-6 h-6" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-800">Tempo Médio de Resolução</h4>
+                  <p className="text-xs text-slate-500 mt-0.5">Média geral baseada no histórico de queixas concluídas.</p>
+                </div>
+                <div className="ml-auto text-right">
+                  <div className="text-2xl font-bold text-blue-600">{avgResolutionDays}</div>
+                  <div className="text-[10px] font-bold text-blue-400 uppercase">Dias úteis</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* History Modal */}
+      {isHistoryModalOpen && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => {
+            setIsHistoryModalOpen(false);
+            setHistoryResults(null);
+            setHistoryCpf('');
+          }}></div>
+          <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-lg overflow-hidden relative z-10 animate-in fade-in zoom-in flex flex-col max-h-[90vh]">
+            <div className="bg-emerald-700 px-6 py-4 flex justify-between items-center text-white shrink-0">
+              <h2 className="text-sm font-bold uppercase tracking-wider flex items-center gap-2">
+                <History className="w-5 h-5"/> Meu Histórico
+              </h2>
+              <button 
+                onClick={() => {
+                  setIsHistoryModalOpen(false);
+                  setHistoryResults(null);
+                  setHistoryCpf('');
+                }}
+                className="text-emerald-200 hover:text-white transition-colors"
+                type="button"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto custom-scroll">
+              <p className="text-sm text-slate-600 mb-4 font-medium">Consulte e gerencie todas as queixas atreladas ao seu CPF.</p>
+              <div className="flex gap-2 mb-6">
+                <input 
+                  type="text" 
+                  placeholder="Seu CPF (Ex: 12345678900)"
+                  value={historyCpf}
+                  onChange={e => setHistoryCpf(e.target.value)}
+                  className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <button 
+                  onClick={handleFetchHistory}
+                  disabled={historyLoading}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-md font-bold text-sm transition-colors disabled:opacity-50"
+                  type="button"
+                >
+                  {historyLoading ? 'Buscando...' : 'Pesquisar'}
+                </button>
+              </div>
+
+              {historyResults && historyResults.length === 0 && (
+                <div className="text-center py-8 text-slate-500 bg-slate-50 rounded-xl border border-slate-100">
+                  <Activity className="w-8 h-8 mx-auto text-slate-300 mb-2"/>
+                  Nenhum registro encontrado para este CPF.
+                </div>
+              )}
+
+              {historyResults && historyResults.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-xs font-bold uppercase text-slate-500 mb-2">Seus Registros Encontrados ({historyResults.length}):</h3>
+                  {historyResults.map(res => (
+                    <div key={res.id} className="bg-white border text-left border-slate-200 shadow-sm rounded-lg p-4">
+                      <div className="flex justify-between items-start mb-2">
+                        <h4 className="font-bold text-slate-800 text-sm line-clamp-1">{res.titulo}</h4>
+                        <span className={`inline-block px-1.5 py-0.5 text-[10px] font-bold uppercase rounded border shrink-0 ${
+                          res.resolvido ? 'border-emerald-200 text-emerald-600 bg-emerald-50' :
+                          res.status === 'Em Andamento' ? 'border-blue-200 text-blue-600 bg-blue-50' :
+                          'border-slate-200 text-slate-500 bg-slate-50'
+                        }`}>
+                          {res.resolvido ? 'Resolvido' : (res.status || 'Em Análise')}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 mb-2 line-clamp-2">{res.descricao}</p>
+                      <div className="flex justify-between items-center text-[10px] text-slate-400 font-medium">
+                        <span className="font-mono bg-slate-100 text-slate-500 px-1 py-0.5 rounded">Prot: {res.protocolo}</span>
+                        <span>{new Date(res.createdAt).toLocaleDateString('pt-BR')}</span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

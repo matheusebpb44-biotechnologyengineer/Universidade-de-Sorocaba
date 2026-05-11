@@ -8,14 +8,28 @@ datasource db {
 }
 
 model Occurrence {
-  id        Int      @id @default(autoincrement())
-  titulo    String
-  descricao String
-  categoria String
-  latitude  Float
-  longitude Float
-  cpf       String   @default("")
-  protocolo String   @unique @default(cuid())
-  resolvido Boolean  @default(false)
-  createdAt DateTime @default(now())
+  id          Int       @id @default(autoincrement())
+  titulo      String
+  descricao   String
+  categoria   String
+  latitude    Float
+  longitude   Float
+  cpf         String    @default("")
+  protocolo   String    @unique @default(cuid())
+  status      String    @default("Em Análise")
+  prioridade  String    @default("Normal")
+  likes       Int       @default(0)
+  resolvido   Boolean   @default(false)
+  resolvedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  comments    Comment[]
+}
+
+model Comment {
+  id           Int        @id @default(autoincrement())
+  texto        String
+  autorCpf     String     @default("")
+  createdAt    DateTime   @default(now())
+  occurrenceId Int
+  occurrence   Occurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
 }
