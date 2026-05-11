@@ -88,6 +88,12 @@ async function startServer() {
   app.put('/api/occurrences/resolve/:protocolo', async (req, res) => {
     try {
       const { protocolo } = req.params;
+      const { cpf } = req.body;
+      
+      if (!cpf) {
+        return res.status(400).json({ error: 'CPF é obrigatório para resolver a queixa.' });
+      }
+
       const updated = await prisma.occurrence.update({
         where: { protocolo },
         data: { 
@@ -135,6 +141,12 @@ async function startServer() {
   app.put('/api/occurrences/:id/like', async (req, res) => {
     try {
       const { id } = req.params;
+      const { cpf } = req.body;
+      
+      if (!cpf) {
+        return res.status(400).json({ error: 'CPF é obrigatório para apoiar.' });
+      }
+
       const updated = await prisma.occurrence.update({
         where: { id: Number(id) },
         data: { likes: { increment: 1 } },
@@ -153,11 +165,12 @@ async function startServer() {
       const { texto, autorCpf } = req.body;
       
       if (!texto) return res.status(400).json({ error: 'Texto do comentário vazio.' });
+      if (!autorCpf) return res.status(400).json({ error: 'CPF é obrigatório para comentar.' });
 
       const comment = await prisma.comment.create({
         data: {
           texto,
-          autorCpf: autorCpf || "Anônimo",
+          autorCpf: autorCpf,
           occurrenceId: Number(id)
         }
       });

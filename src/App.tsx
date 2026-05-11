@@ -168,6 +168,9 @@ export default function App() {
   const [newComment, setNewComment] = useState('');
   const [commentCpf, setCommentCpf] = useState('');
 
+  const [cpfPromptConfig, setCpfPromptConfig] = useState<{isOpen: boolean, message: string, action: ((cpf: string) => void) | null}>({ isOpen: false, message: '', action: null });
+  const [promptCpf, setPromptCpf] = useState('');
+
   // Load occurrences
   useEffect(() => {
     fetchOccurrences();
@@ -244,20 +247,31 @@ export default function App() {
     }
   };
 
-  const handleLike = async (id: number) => {
-    try {
-      await axios.put(`/api/occurrences/${id}/like`);
-      await fetchOccurrences();
-      if (searchResult && searchResult.id === id) {
-         setSearchResult(prev => prev ? { ...prev, likes: prev.likes + 1 } : null);
+  const handleLike = (id: number) => {
+    setCpfPromptConfig({
+      isOpen: true,
+      message: 'Para apoiar esta queixa, é obrigatório informar seu CPF:',
+      action: async (cpf) => {
+        try {
+          await axios.put(`/api/occurrences/${id}/like`, { cpf });
+          await fetchOccurrences();
+          if (searchResult && searchResult.id === id) {
+             setSearchResult(prev => prev ? { ...prev, likes: prev.likes + 1 } : null);
+          }
+        } catch (error: any) {
+          console.error(error);
+          alert(error.response?.data?.error || 'Erro ao apoiar ocorrência.');
+        }
       }
-    } catch (error) {
-      console.error(error);
-    }
+    });
   };
 
   const handleAddComment = async (id: number) => {
     if (!newComment.trim()) return;
+    if (!commentCpf.trim()) {
+      alert('O seu CPF é obrigatório para poder comentar.');
+      return;
+    }
     try {
       await axios.post(`/api/occurrences/${id}/comments`, {
         texto: newComment,
@@ -857,7 +871,7 @@ export default function App() {
                     <div className="flex flex-col gap-2">
                       <input 
                         type="text" 
-                        placeholder="Seu CPF (opcional)"
+                        placeholder="Seu CPF (obrigatório para comentar)"
                         value={commentCpf}
                         onChange={e => setCommentCpf(e.target.value)}
                         className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1020,6 +1034,52 @@ export default function App() {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cpf Prompt Modal */}
+      {cpfPromptConfig.isOpen && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setCpfPromptConfig({ ...cpfPromptConfig, isOpen: false })}></div>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm overflow-hidden relative z-10 animate-in fade-in zoom-in">
+            <div className="p-6">
+              <h3 className="font-bold text-slate-800 mb-2 text-lg">Confirmação Necessária</h3>
+              <p className="text-sm text-slate-600 mb-4">{cpfPromptConfig.message}</p>
+              
+              <input 
+                type="text" 
+                placeholder="Seu CPF (só números)"
+                value={promptCpf}
+                onChange={e => setPromptCpf(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+              />
+              
+              <div className="flex gap-2 justify-end">
+                <button 
+                  onClick={() => setCpfPromptConfig({ ...cpfPromptConfig, isOpen: false })}
+                  className="px-4 py-2 text-sm font-bold text-slate-500 hover:text-slate-800 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={() => {
+                    if (!promptCpf.trim()) {
+                      alert('O CPF é obrigatório para continuar.');
+                      return;
+                    }
+                    if (cpfPromptConfig.action) {
+                      cpfPromptConfig.action(promptCpf.trim());
+                    }
+                    setCpfPromptConfig({ isOpen: false, message: '', action: null });
+                    setPromptCpf('');
+                  }}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-bold transition-colors"
+                >
+                  Confirmar
+                </button>
+              </div>
             </div>
           </div>
         </div>
