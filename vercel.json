@@ -1,8 +1,13 @@
 {
   "framework": "vite",
   "buildCommand": "vite build",
-  "installCommand": "npm install && npx prisma generate",
+  "installCommand": "npm install && npx prisma db push && npx prisma generate",
   "outputDirectory": "dist",
+  "functions": {
+    "api/**/*": {
+      "includeFiles": "prisma/**"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",
