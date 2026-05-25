@@ -67,7 +67,7 @@ app.post('/api/occurrences', async (req, res) => {
       
       const txtData = last10.map(o => `Protocolo: ${o.protocolo}\nTítulo: ${o.titulo}\nCategoria: ${o.categoria}\nDescrição: ${o.descricao}\nLatitude: ${o.latitude}\nLongitude: ${o.longitude}\nData: ${o.createdAt}\n-----------------------------`).join('\n');
       
-      const filename = `relatorio-${Date.now()}.txt`;
+      const filename = process.env.VERCEL ? `/tmp/relatorio-${Date.now()}.txt` : `relatorio-${Date.now()}.txt`;
       fs.writeFileSync(filename, txtData);
       
       const mailOptions = {
@@ -77,7 +77,7 @@ app.post('/api/occurrences', async (req, res) => {
         text: 'Seguem em anexo os últimos 10 registros.',
         attachments: [
           {
-            filename,
+            filename: `relatorio-${Date.now()}.txt`,
             path: filename
           }
         ]
@@ -93,9 +93,9 @@ app.post('/api/occurrences', async (req, res) => {
     }
 
     res.status(201).json(occurrence);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error creating occurrence:', error);
-    res.status(500).json({ error: 'Erro ao criar ocorrência.' });
+    res.status(500).json({ error: 'Erro ao criar ocorrência.', details: error.message });
   }
 });
 
